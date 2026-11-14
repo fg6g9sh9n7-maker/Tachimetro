@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#090b10">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Tachimetro">
+  <link rel="manifest" href="manifest.json">
+  <title>Tachimetro</title>
+  <style>
+    :root { color-scheme: dark; --bg:#090b10; --panel:#121620; --muted:#8b93a3; --line:#252c39; --accent:#e8edf5; --green:#68d6a3; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; background:var(--bg); color:#f5f7fb; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; padding: max(22px, env(safe-area-inset-top)) 20px max(24px, env(safe-area-inset-bottom)); }
+    main { max-width:520px; margin:0 auto; }
+    header { display:flex; justify-content:space-between; align-items:center; margin:8px 0 30px; }
+    .brand { font-size:13px; letter-spacing:.18em; font-weight:700; color:#aeb6c5; }
+    .status { font-size:11px; color:var(--muted); border:1px solid var(--line); border-radius:30px; padding:7px 10px; }
+    .status:before { content:""; display:inline-block; width:6px; height:6px; border-radius:50%; background:#707887; margin:0 7px 1px 0; }
+    .status.live:before { background:var(--green); box-shadow:0 0 8px #68d6a3; }
+    .speed-card { background:linear-gradient(160deg,#171d29,#10141d 70%); border:1px solid #242c3a; border-radius:28px; padding:27px 22px 25px; text-align:center; box-shadow:0 18px 55px #0005; }
+    .eyebrow { color:var(--muted); font-size:11px; letter-spacing:.2em; font-weight:700; }
+    .speed { font-variant-numeric:tabular-nums; font-size:clamp(82px,22vw,116px); line-height:1.08; font-weight:650; letter-spacing:-.075em; margin:16px 0 4px; }
+    .unit { color:#aab2c0; font-size:15px; letter-spacing:.12em; }
+    .accuracy { color:var(--muted); font-size:12px; margin-top:19px; }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:14px; }
+    .metric { background:var(--panel); border:1px solid var(--line); border-radius:18px; padding:17px 16px; }
+    .metric label { display:block; color:var(--muted); font-size:10px; letter-spacing:.14em; margin-bottom:9px; }
+    .metric strong { font-size:27px; font-weight:600; font-variant-numeric:tabular-nums; }
+    .metric small { color:var(--muted); font-size:12px; margin-left:4px; }
+    .chart-card { margin-top:14px; background:var(--panel); border:1px solid var(--line); border-radius:18px; padding:17px 16px 12px; }
+    .chart-head { display:flex; justify-content:space-between; color:var(--muted); font-size:10px; letter-spacing:.14em; margin-bottom:12px; }
+    canvas { width:100%; height:100px; display:block; }
+    .controls { display:flex; gap:10px; margin-top:17px; }
+    button { border:0; border-radius:15px; min-height:52px; padding:0 18px; font-size:14px; font-weight:650; cursor:pointer; }
+    #start { flex:1; background:#f1f4f8; color:#0b0d12; }
+    #reset { background:#202735; color:#e7ebf2; }
+    button:disabled { opacity:.45; }
+    .note { color:#818a9a; font-size:11px; line-height:1.55; margin:18px 3px 0; }
+    .notice { display:none; background:#211c12; border:1px solid #594728; color:#f0d7a2; padding:12px 14px; border-radius:13px; font-size:12px; line-height:1.45; margin-top:14px; }
+    .notice.show { display:block; }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="brand">TACHIMETRO <span style="color:#fff">/</span> IPHONE</div>
+    <div class="status" id="status">FERMO</div>
+  </header>
+
+  <section class="speed-card">
+    <div class="eyebrow">VELOCITÀ ATTUALE</div>
+    <div class="speed" id="speed">0.0</div>
+    <div class="unit">KM/H</div>
+    <div class="accuracy" id="accuracy">In attesa del GPS</div>
+  </section>
+
+  <section class="grid">
+    <div class="metric"><label>VELOCITÀ MASSIMA</label><strong id="max">0.0</strong><small>km/h</small></div>
+    <div class="metric"><label>VELOCITÀ MEDIA</label><strong id="avg">0.0</strong><small>km/h</small></div>
+    <div class="metric"><label>DISTANZA</label><strong id="distance">0.00</strong><small>km</small></div>
+    <div class="metric"><label>ACCELERAZIONE</label><strong id="accel">—</strong><small>m/s²</small></div>
+  </section>
+
+  <section class="chart-card">
+    <div class="chart-head"><span>ANDAMENTO VELOCITÀ</span><span>ULTIMI 60 SECONDI</span></div>
+    <canvas id="chart" width="700" height="200"></canvas>
+  </section>
+
+  <div class="controls">
+    <button id="start">AVVIA MISURAZIONE</button>
+    <button id="reset">AZZERA</button>
+  </div>
+  <div class="notice" id="notice"></div>
+  <p class="note">La velocità principale proviene dal GPS. L'accelerometro mostra l'accelerazione rilevata dal sensore, ma non viene integrato per stimare la velocità: gli errori accumulati renderebbero il risultato inattendibile. Per misure migliori, tieni il telefono fermo e con visuale libera del cielo.</p>
+</main>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const speedEl=$('speed'), maxEl=$('max'), avgEl=$('avg'), distEl=$('distance');
+  const accelEl=$('accel'), accuracyEl=$('accuracy'), statusEl=$('status');
+  const startBtn=$('start'), resetBtn=$('reset'), notice=$('notice'), canvas=$('chart');
+  const ctx=canvas.getContext('2d');
+
+  let watchId=null, motionHandler=null, samples=[], speeds=[], maxSpeed=0, distance=0;
+  let lastPoint=null, lastTime=null, lastSpeed=0, running=false, chartPoints=[];
+  const kmh = mps => mps * 3.6;
+  const fmt = n => Number(n).toFixed(1);
+
+  function showNotice(msg) { notice.textContent=msg; notice.classList.add('show'); }
+  function clearNotice() { notice.classList.remove('show'); }
+
+  function drawChart() {
+    const w=canvas.width, h=canvas.height;
+    ctx.clearRect(0,0,w,h);
+    ctx.strokeStyle='#293140'; ctx.lineWidth=1;
+    for(let i=1;i<4;i++){ const y=h*i/4; ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke(); }
+    if(chartPoints.length<2) return;
+    const max=Math.max(20,...chartPoints.map(p=>p.v))*1.15;
+    ctx.beginPath();
+    chartPoints.forEach((p,i)=>{
+      const x=i/(Math.max(1,chartPoints.length-1))*w;
+      const y=h-(p.v/max)*h;
+      if(i===0)ctx.moveTo(x,y); else ctx.lineTo(x,y);
+    });
+    ctx.strokeStyle='#e8edf5';ctx.lineWidth=4;ctx.lineJoin='round';ctx.lineCap='round';ctx.stroke();
+  }
+
+  function updateSpeed(v, accuracy) {
+    if(!Number.isFinite(v) || v<0) return;
+    // Ignore obviously implausible GPS spikes.
+    if(v>350) return;
+    speeds.push(v); if(speeds.length>180) speeds.shift();
+    const recent=speeds.slice(-4);
+    const smooth=recent.reduce((a,b)=>a+b,0)/recent.length;
+    speedEl.textContent=fmt(smooth);
+    maxSpeed=Math.max(maxSpeed,smooth);
+    maxEl.textContent=fmt(maxSpeed);
+    const avg=speeds.reduce((a,b)=>a+b,0)/speeds.length;
+    avgEl.textContent=fmt(avg);
+    accuracyEl.textContent=accuracy!=null ? `Precisione GPS ±${Math.round(accuracy)} m` : 'Velocità stimata dal GPS';
+    chartPoints.push({t:Date.now(),v:smooth});
+    const cutoff=Date.now()-60000;
+    chartPoints=chartPoints.filter(p=>p.t>=cutoff);
+    drawChart();
+  }
+
+  function haversine(a,b) {
+    const R=6371000, rad=x=>x*Math.PI/180;
+    const dLat=rad(b.lat-a.lat), dLon=rad(b.lon-a.lon);
+    const x=Math.sin(dLat/2)**2+Math.cos(rad(a.lat))*Math.cos(rad(b.lat))*Math.sin(dLon/2)**2;
+    return 2*R*Math.asin(Math.sqrt(x));
+  }
+
+  function onPosition(pos) {
+    const c=pos.coords, now=pos.timestamp || Date.now();
+    if(c.accuracy && c.accuracy>60) {
+      accuracyEl.textContent=`Segnale GPS debole · ±${Math.round(c.accuracy)} m`;
+      return;
+    }
+    let v = Number.isFinite(c.speed) && c.speed>=0 ? c.speed : null;
+    const point={lat:c.latitude,lon:c.longitude};
+    if(v===null && lastPoint && lastTime && now>lastTime) {
+      const dt=(now-lastTime)/1000;
+      if(dt>0.5 && dt<10) v=haversine(lastPoint,point)/dt;
+    }
+    if(v!==null) updateSpeed(kmh(v),c.accuracy);
+    if(lastPoint && lastTime && now>lastTime) {
+      const d=haversine(lastPoint,point);
+      if(d<150) distance+=d;
+      distEl.textContent=(distance/1000).toFixed(2);
+    }
+    lastPoint=point; lastTime=now;
+  }
+
+  function onPositionError(err) {
+    let msg='Impossibile leggere la posizione.';
+    if(err.code===1) msg='Permesso di posizione negato. Abilita la posizione per Safari nelle Impostazioni dell’iPhone.';
+    if(err.code===2) msg='Segnale GPS non disponibile. Prova all’aperto.';
+    if(err.code===3) msg='Il GPS sta impiegando troppo tempo. Riprova.';
+    showNotice(msg);
+    stop();
+  }
+
+  function onMotion(e) {
+    const a=e.acceleration;
+    if(a && [a.x,a.y,a.z].every(Number.isFinite)) {
+      const magnitude=Math.sqrt(a.x*a.x+a.y*a.y+a.z*a.z);
+      accelEl.textContent=magnitude.toFixed(2);
+    } else if(e.accelerationIncludingGravity) {
+      accelEl.textContent='—';
+    }
+  }
+
+  async function startMotion() {
+    if(!('DeviceMotionEvent' in window)) return;
+    try {
+      if(typeof DeviceMotionEvent.requestPermission==='function') {
+        const permission=await DeviceMotionEvent.requestPermission();
+        if(permission!=='granted') return;
+      }
+      motionHandler=onMotion;
+      window.addEventListener('devicemotion',motionHandler);
+    } catch(e) { /* Motion is optional; GPS remains functional. */ }
+  }
+
+  function start() {
+    clearNotice();
+    if(!('geolocation' in navigator)) {
+      showNotice('Questo browser non supporta la geolocalizzazione. Apri la pagina con Safari.');
+      return;
+    }
+    if(running) return;
+    if(!window.isSecureContext) {
+      showNotice('Per usare il GPS serve un indirizzo HTTPS. Apri l’app dal link sicuro del sito.');
+      return;
+    }
+    running=true; statusEl.textContent='MISURAZIONE'; statusEl.classList.add('live');
+    startBtn.textContent='FERMA MISURAZIONE';
+    watchId=navigator.geolocation.watchPosition(onPosition,onPositionError,{
+      enableHighAccuracy:true, maximumAge:1000, timeout:15000
+    });
+    startMotion();
+  }
+
+  function stop() {
+    if(watchId!==null) navigator.geolocation.clearWatch(watchId);
+    watchId=null;
+    if(motionHandler) window.removeEventListener('devicemotion',motionHandler);
+    motionHandler=null; running=false;
+    statusEl.textContent='FERMO';statusEl.classList.remove('live');
+    startBtn.textContent='AVVIA MISURAZIONE';
+  }
+
+  startBtn.addEventListener('click',()=>running?stop():start());
+  resetBtn.addEventListener('click',()=>{
+    stop(); samples=[];speeds=[];maxSpeed=0;distance=0;lastPoint=null;lastTime=null;chartPoints=[];
+    speedEl.textContent='0.0';maxEl.textContent='0.0';avgEl.textContent='0.0';
+    distEl.textContent='0.00';accelEl.textContent='—';accuracyEl.textContent='In attesa del GPS';
+    drawChart();clearNotice();
+  });
+  drawChart();
+  if('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+    window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}));
+  }
+})();
+</script>
+</body>
+</html>
